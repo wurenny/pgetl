@@ -3,6 +3,7 @@ This soft only for PostgreSQL
 
 #Install
 $ chmod 700 pgetl/pgetl-*
+
 $ pgetl/pgetl-install
 
 $ exit //means re-login
