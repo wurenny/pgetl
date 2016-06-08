@@ -1,0 +1,171 @@
+#!/bin/bash
+#******************************************************************************************
+#*
+#* This Source Code Form is subject to the terms of the Mozilla Public
+#* License, v. 2.0. If a copy of the MPL was not distributed with this
+#* file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#*
+#* Copyright (c) 2015-2016, wurenny@gmail.com, All rights reserved
+#*
+#* IDENTIFICATION
+#*     pgetl
+#* AUTHOR:renny
+#* PARAMS:
+#*     date: schedule date (8Bit eg:20160101)
+#*     batch: batch number (integer eg:1)
+#*     etl: filter which query condition for the view v_sch_etl
+#*     cmd: filter which query condition for the view v_sch_cmd
+#* HISTORY:
+#*     2016/05/15:created
+#*
+#* This file is part of PGETL(PostgreSQL ETL) project
+#* pgetl is the portal program of PGETL
+#*
+#******************************************************************************************
+BINPATH=`cd $(dirname $0);pwd`
+SCH_PATH="$BINPATH/.."
+SCH_CFG_FILE="$SCH_PATH/cfg/app/sch"
+GLOBAL_INI="$SCH_PATH/cfg/sch/global.ini"
+PG_PATH=`grep "^PG_PATH" $GLOBAL_INI | cut -d"=" -f2`
+PATH=$PG_PATH:$SCH_PATH/bin:$PATH:.
+
+SCH_DB_IP=`grep "^SCH_DB_IP" $GLOBAL_INI | cut -d"=" -f2`
+SCH_DB_PORT=`grep "^SCH_DB_PORT" $GLOBAL_INI | cut -d"=" -f2`
+SCH_DB_NAME=`grep "^SCH_DB_NAME" $GLOBAL_INI | cut -d"=" -f2`
+SCH_DB_SCHEMA=`grep "^SCH_DB_SCHEMA" $GLOBAL_INI | cut -d"=" -f2`
+SCH_DB_USERNAME=`grep "^SCH_DB_USERNAME" $GLOBAL_INI | cut -d"=" -f2`
+SCH_DB_PASSWORD=`grep "^SCH_DB_PASSWORD" $GLOBAL_INI | cut -d"=" -f2`
+
+SCH_ETL_TABLE=`grep "^SCH_ETL_TABLE" $GLOBAL_INI | cut -d"=" -f2`
+SCH_CMD_TABLE=`grep "^SCH_CMD_TABLE" $GLOBAL_INI | cut -d"=" -f2`
+
+time="date +'%Y-%m-%d %H:%M:%S'"
+
+#help information
+[[ $# -eq 0 || $1"a" = "--helpa" ]] && $SCH_PATH/bin/usage.sh && exit
+
+#get parameters
+for i in $(seq $#)
+do
+	eval map="$"$i
+	if [ ${map:0:5} = "date=" ];then
+		schdate=${map:5}
+	fi
+	if [ ${map:0:6} = "batch=" ];then
+		bchno=${map:6}
+	fi
+	if [ ${map:0:4} = "etl=" ];then
+		etlwhere=${map:4}
+		etlwhere="${etlwhere:+"where $etlwhere"}"
+	fi
+	if [ ${map:0:4} = "cmd=" ];then
+		cmdwhere=${map:4}
+		cmdwhere="${cmdwhere:+"where $cmdwhere"}"
+	fi
+done
+
+#default schedule date
+if [ $schdate = "sysdate" ];then
+	sql="select to_char(current_date,'yyyymmdd')"
+	schdate=`$SCH_PATH/bin/sql.sh "$schdate" "$SCH_DB_IP" "$SCH_DB_PORT" "$SCH_DB_NAME" "$SCH_DB_USERNAME" "$SCH_DB_PASSWORD" "$sql"`
+	schdate=`echo "$schdate" | sed 's/^\s*//g'`
+fi
+
+#welcome
+echo "|-------------------------------------------------------------------------------|
+|.............................PostgreSQL ETL....................................|
+|-------------------------------------------------------------------------------|"
+
+#check input parameters
+#check date
+echo "[$(eval $time)]:: (-).check the input parameters: date" 
+rtncode=`$SCH_PATH/bin/date.sh "$schdate"`
+if [ $rtncode -eq 0 ];then
+	echo -e "[$(eval $time)]:: (-).date is $schdate, correct"
+else
+	echo -e "ERR-00001[$rtncode]: invalid parameter for schedule date: $schdate! correct format:20130101\n"
+	exit
+fi
+SCH_START_TIME=${schdate:0:4}"-"${schdate:4:2}"-"${schdate:6:4}
+SCH_END_TIME=$SCH_START_TIME
+sch_date=$SCH_START_TIME
+
+#check batch no
+echo "[$(eval $time)]:: (-).check the input parameters: batch"
+echo $bchno | grep -E '[0-9]+' >/dev/null
+if [ $? -ne 0 ];then
+	echo -e "ERR-00001[$rtncode]: invalid parameter for batch number: $bchno\n"
+	exit
+else
+	sql="select case when apart < interval'0 day' then starttime +apart else starttime end starttime,case when apart > interval'0 day' then endtime +apart else endtime end endtime from(select bchno,('$SCH_START_TIME ' ||starttime)::timestamp starttime,('$SCH_END_TIME ' ||endtime)::timestamp endtime,coalesce(apart,interval'0 day') apart from $SCH_DB_SCHEMA.PRM_SCH_BATCH) t where bchno=$bchno limit 1"
+	str=`$SCH_PATH/bin/sql.sh "$schdate" "$SCH_DB_IP" "$SCH_DB_PORT" "$SCH_DB_NAME" "$SCH_DB_USERNAME" "$SCH_DB_PASSWORD" "$sql"`
+	if [ -z "$str" ];then
+		echo -e "ERR-00001[1]: invalid value for batch number: $bchno\n"
+		exit
+	else
+		echo "[$(eval $time)]:: (-).batchno is $bchno, correct"
+		SCH_START_TIME=`echo $str | cut -d'|' -f1 | sed 's/\s$//'`
+		SCH_END_TIME=`echo $str | cut -d'|' -f2 | sed 's/^\s//'`
+	fi
+fi
+
+
+#check log directory
+echo "[$(eval $time)]:: (-).check log directory"
+logfile=`$SCH_PATH/bin/logfile.sh "$schdate"`
+if [ $logfile = "-1" ];then
+	echo -e "ERR-00002[$logfile]: initialize log directory failed\n"
+	exit
+else
+	export logfile
+	echo -e "[$(eval $time)]:: (-).initialize log directory success"
+fi
+echo "date:$schdate  batch:"$bchno"	logfile:$logfile" >$logfile
+
+
+#generate schedule scripts
+#for etl
+echo "[$(eval $time)]:: (1).generate schedule scripts for etl" |tee -a $logfile
+sql="copy (select * from $SCH_DB_SCHEMA.$SCH_ETL_TABLE "$etlwhere") to stdout with csv force quote *"
+$SCH_PATH/bin/sql.sh "$schdate" "$SCH_DB_IP" "$SCH_DB_PORT" "$SCH_DB_NAME" "$SCH_DB_USERNAME" "$SCH_DB_PASSWORD" "$sql" >$SCH_CFG_FILE 2>>$logfile
+rtncode=$?
+if [ $rtncode -eq 0 ];then
+	echo -e "[$(eval $time)]:: (1).success: generate schedule scripts for etl" |tee -a $logfile
+else
+	echo "[$(eval $time)]:: failed: generate schedule scripts for etl" |tee -a $logfile
+	echo -e "ERR-00003[$rtncode]: $sql" |tee -a $logfile
+	echo -e "log file for detial: $logfile\n"
+	exit
+fi
+
+#for cmd
+echo "[$(eval $time)]:: (2).generate schedule scripts for cmd" |tee -a $logfile
+sql="copy (select * from $SCH_DB_SCHEMA.$SCH_CMD_TABLE "$cmdwhere") to stdout with csv force quote *"
+$SCH_PATH/bin/sql.sh "$schdate" "$SCH_DB_IP" "$SCH_DB_PORT" "$SCH_DB_NAME" "$SCH_DB_USERNAME" "$SCH_DB_PASSWORD" "$sql" >>$SCH_CFG_FILE 2>>$logfile
+rtncode=$?
+if [ $rtncode -eq 0 ];then
+	echo -e "[$(eval $time)]:: (2).success: generate schedule scripts for cmd" |tee -a $logfile
+else
+	echo "[$(eval $time)]:: failed: generate schedule scripts for cmd" |tee -a $logfile
+	echo -e "ERR-00003[$rtncode]: $sql" |tee -a $logfile
+	echo -e "log file for detial: $logfile\n"
+	exit
+fi
+
+
+#ident phrase
+$SCH_PATH/bin/phrase.sh "$logfile" "$schdate" "$SCH_CFG_FILE" "##start_time##" "$SCH_START_TIME"
+[[ 0 -ne $? ]] && exit
+$SCH_PATH/bin/phrase.sh "$logfile" "$schdate" "$SCH_CFG_FILE" "##end_time##" "$SCH_END_TIME"
+[[ 0 -ne $? ]] && exit
+$SCH_PATH/bin/phrase.sh "$logfile" "$schdate" "$SCH_CFG_FILE" "##sch_date##" "$sch_date"
+[[ 0 -ne $? ]] && exit
+$SCH_PATH/bin/phrase.sh "$logfile" "$schdate" "$SCH_CFG_FILE" "##batch_no##" "$bchno"
+[[ 0 -ne $? ]] && exit
+
+#etl start
+echo "|-----------------------------JOB START-----------------------------------------|"|tee -a $logfile
+$SCH_PATH/bin/sch.sh "$logfile" "$schdate"
+echo "|--------------------------Finish ALL [$(eval $time)]--------------------------|"|tee -a $logfile
+$SCH_PATH/bin/pgetlstat |tee -a $logfile
+echo -e "detail-log: "$logfile""

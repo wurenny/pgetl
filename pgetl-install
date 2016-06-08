@@ -1,0 +1,183 @@
+#* This Source Code Form is subject to the terms of the Mozilla Public
+#* License, v. 2.0. If a copy of the MPL was not distributed with this
+#* file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#*
+#* Copyright (c) 2015-2016, wurenny@gmail.com, All rights reserved
+#*
+#* IDENTIFICATION
+#*     pgetl-install
+#* AUTHOR:renny
+#* PARAMS:
+#*     $1: optional, only support [nodemo]
+#* HISTORY:
+#*     2016/05/15:created
+#*
+#* This file is part of PGETL(PostgreSQL ETL) project
+#* pgetl-install is installer for PGETL
+#*
+#******************************************************************************************
+BINPATH=`cd $(dirname $0);pwd`
+SCH_PATH="$BINPATH/scheduler"
+GLOBAL_INI="$SCH_PATH/cfg/sch/global.ini"
+GLOBAL_SMP="$SCH_PATH/cfg/sch/global.ini.sample"
+
+time="date +'%Y-%m-%d %H:%M:%S'"
+stty erase ^H
+
+#prompt
+echo "|-------------------------------------------------------------------------------|
+|.........................PostgreSQL ETL Installer..............................|
+|-------------------------------------------------------------------------------|
+|....This guide will help you to finish installation for PGETL..................|
+|....PGETL uses database-table to store your schedule metadata..................|
+|....so you need to provide connection parameters in next steps.................|
+|....according to the prompt on screen..........................................|
+|-------------------------------------------------------------------------------|"
+
+#param
+[[ -n "$1" && "$1" != "nodemo" ]] && echo "The first optional parameter only support [nodemo]" && exit
+
+#chmod
+chmod -R 700 $BINPATH/*
+[[ $? -ne 0 ]] && echo "must be owner with PGETL all-directory" && exit
+
+#init global config 1th
+[[ ! -f "$GLOBAL_INI" && -f "$GLOBAL_SMP" ]] && cp $GLOBAL_SMP $GLOBAL_INI
+
+#add path
+echo "export PGETL_HOME=$SCH_PATH" > ~/.pgetlrc
+echo "export PATH=\$PGETL_HOME/bin:\$PATH:." >> ~/.pgetlrc
+wc=`grep "source ~/.pgetlrc" ~/.bash_profile 2>/dev/null | wc -l`
+[[ $wc -eq 0 ]] && echo "source ~/.pgetlrc" >> ~/.bash_profile
+source ~/.bash_profile
+
+#get parameters
+#psql
+psqlpath=$(which psql 2>/dev/null)
+if [ -z "$psqlpath" ];then
+	echo "****WANNING:psql not found"
+	while true
+	do
+		read -p "provide path of psql client [/bin/psql]:" psqlpath
+		[[ -z "$psqlpath" ]] && psqlpath="/bin/psql"
+		[[ -f "$psqlpath" && -x "$psqlpath" ]] &&
+		break || echo "invalid path for psql, input again"
+	done
+fi
+psqlpath=$(dirname $psqlpath)
+PATH=$psqlpath:$PATH:.
+
+#ip
+while true
+do
+	read -p "IP Address >[127.0.0.1]:" ip
+	ip=${ip:-"127.0.0.1"}
+	[[ $ip =~ ^[1-9][0-9]{0,2}\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]] && 
+	loop=0 &&	(
+		OIFS=$IFS;IFS='.';ip=($ip);IFS=$OIFS;
+		[[ ${ip[0]} -le 255 && ${ip[1]} -le 255 && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+	) || loop=1
+	[[ $loop -eq 0 ]] && break || (echo "****WANNING:invalid ip address: ${ip:-NULL}, input again")
+done
+
+#port
+while true
+do
+	read -p "Port Number>[5432]     :" port
+	port=${port:-"5432"}
+	[[ -n $port && $port =~ [0-9]+ && $port -gt 0 && $port -lt 65535 ]] && 
+	break || (echo "****WANNING:invalid port number: ${port:-NULL}, (must between 1~65535, input again)")
+done
+
+#dbname
+read -p "DatabaseName>[postgres]:" db
+[[ -z $db ]] && db="postgres"
+#schema name
+read -p "Schema Name >[public]  :" schema
+[[ -z $schema ]] && schema="public"
+#username
+read -p "User Name   >[postgres]:" username
+[[ -z $username ]] && username="postgres"
+#password
+read -p "User Password          :" password
+[ -n $password ] && export PGPASSWORD="$password"
+
+echo "********************************************************************************"
+echo -e "connection={\n  ip=$ip\n  port=$port\n  dbname=$db\n  schema=$schema\n  username=$username\n  password=$password\n}"
+echo "********************************************************************************"
+
+#confirm
+while true
+do
+	read -p "continue with PGETL install? y|n:" confirm
+	[[ -n $confirm && $confirm = "n" ]] && exit
+	[[ -n $confirm && $confirm = "y" ]] &&
+	break || (echo "****WANNING:must be y or n, input again")
+done
+
+#create schema ?
+sql="select count(*) x from pg_namespace where nspname='$schema'"
+conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username" -Ptuples_only -c "$sql" 2>&1)
+[[ $conn != " 0" && $conn != " 1" ]] && echo "$conn" && exit
+if [ "$conn" = " 1" ];then
+	sql="select count(*) x from pg_tables where schemaname='$schema' and tablename in
+			('prm_sch_batch','prm_sch_dict','prm_sch_schema','prm_sch_etl','prm_sch_cmd','prm_sch_log')"
+	conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username"  -Ptuples_only -c "$sql" 2>&1)
+	#uninstall?
+	if [ "$conn" != " 0" ];then
+		echo "installer detect: it seems PGETL has been installed, remove it first?"
+		while true
+		do
+			read -p "continue removing previous PGETL? y|n:" confirm
+			[[ -n $confirm && $confirm = "n" ]] && break
+			if [ -n "$confirm" -a "$confirm" = "y" ];then
+				conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username" -v__PGETL_DB_SCHEMA="$schema" -f "$BINPATH/sqlsource/uistl.sql" 2>&1)
+				#echo $conn
+				break
+			fi
+			echo "****WANNING:must be y or n, input again"
+		done
+	fi
+else
+	echo "HINT: schema:$schema not exist, will be auto-create"
+	sql="create schema $schema"
+	conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username" -Ptuples_only -c "$sql" 2>&1)
+	[[ $conn != "CREATE SCHEMA" ]] && echo "$conn" && exit
+fi
+
+#init global config 2th
+sed -i \
+-e "s:^PG_PATH=.*:PG_PATH=${psqlpath}:" \
+-e "s:^SCH_PATH=.*:SCH_PATH=${BINPATH}/scheduler:" \
+-e "s/^SCH_DB_IP=.*/SCH_DB_IP=${ip}/" \
+-e "s/^SCH_DB_PORT=.*/SCH_DB_PORT=${port}/" \
+-e "s/^SCH_DB_NAME=.*/SCH_DB_NAME=${db}/" \
+-e "s/^SCH_DB_SCHEMA=.*/SCH_DB_SCHEMA=${schema}/" \
+-e "s/^SCH_DB_USERNAME=.*/SCH_DB_USERNAME=${username}/" \
+-e "s/^SCH_DB_PASSWORD=.*/SCH_DB_PASSWORD=${password}/" \
+$GLOBAL_INI
+
+#install db
+conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username" -v__PGETL_DB_SCHEMA="$schema" -f "$BINPATH/sqlsource/istl.sql" 2>&1)
+echo $conn > $SCH_PATH/log/pgetl-install.log
+
+#install demo
+[[ -n $1 && $1 = "nodemo" ]] && echo "HINT: install with no demo" ||
+conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username" \
+			-v__PGETL_DB_NAME="$db" \
+			-v__PGETL_DB_SCHEMA="$schema" \
+			-v__PGETL_DB_IP="$ip" \
+			-v__PGETL_DB_PORT="$port" \
+			-v__PGETL_DB_USERNAME="$username" \
+			-v__PGETL_DB_PASSWORD="$password" \
+			-f "$BINPATH/sqlsource/istlplus.sql" 2>&1)
+echo $conn >> $SCH_PATH/log/pgetl-install.log
+
+#prompt
+echo "|--------------------------------INSTALL LOG------------------------------------|
+    install path:$BINPATH
+    log path:$SCH_PATH/log
+    configure file:$GLOBAL_INI"
+[[ -z $1 || $1 != "nodemo" ]] && echo "    a demo has been installed, run \"pgetl batch=1 date=sysdate\" to test it :)"
+echo "    Note: should Re-login and the `tput bold && tput smul`pgetl`tput sgr0` `tput bold && tput smul`pgetlstat`tput sgr0` command would be included in PATH
+|--------------------------------FINISH INSTALL---------------------------------|"

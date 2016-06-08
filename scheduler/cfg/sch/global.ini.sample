@@ -1,0 +1,24 @@
+#Global configure about schdule parameters
+
+#project name
+ARRAY_NAME=PGETL
+
+#CONFIGURE TABLE
+SCH_ETL_TABLE=v_sch_etl
+SCH_CMD_TABLE=v_sch_cmd
+SCH_LOG_TABLE=prm_sch_log
+
+#PATH
+PG_PATH=
+SCH_PATH=
+
+#parallel control
+MAX_PARALLEL=8
+
+#connection info
+SCH_DB_IP=127.0.0.1
+SCH_DB_PORT=5432
+SCH_DB_NAME=pgetl
+SCH_DB_SCHEMA=public
+SCH_DB_USERNAME=pgetl
+SCH_DB_PASSWORD=

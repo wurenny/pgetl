@@ -1,0 +1,73 @@
+#!/bin/bash
+#******************************************************************************************
+#*
+#* This Source Code Form is subject to the terms of the Mozilla Public
+#* License, v. 2.0. If a copy of the MPL was not distributed with this
+#* file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#*
+#* Copyright (c) 2015-2016, wurenny@gmail.com, All rights reserved
+#*
+#* IDENTIFICATION
+#*     pgetlstat
+#* AUTHOR:renny
+#* PARAMS:
+#*     $1: "-f" means flush display from time to time, end while all jobs are finished; "-F" means no end until to stop manually
+#*     $2: flush interval seconds
+#* HISTORY:
+#*     2016/05/15:created
+#*
+#* This file is part of PGETL(PostgreSQL ETL) project
+#* pgetlstat is a jobs query tool for PGETL
+#*
+#******************************************************************************************
+BINPATH=`cd $(dirname $0);pwd`
+SCH_PATH="$BINPATH/.."
+SCH_CFG_FILE="$SCH_PATH/cfg/app/sch"
+GLOBAL_INI="$SCH_PATH/cfg/sch/global.ini"
+PG_PATH=`grep "^PG_PATH" $GLOBAL_INI | cut -d"=" -f2`
+PATH=$PG_PATH:$SCH_PATH/bin:$PATH:.
+
+[[ -n "$1" && "$1" = "--help" ]] && $SCH_PATH/bin/statusg.sh && exit
+[[ -n "$1" && "$1" = "-f" ]] && time=-1 || time=1
+[[ -n "$1" && "$1" = "-F" ]] && (loop=1;time=-1)
+[[ -n "$2" && (! -z $(awk '$0+0==$0' <<< $2)) ]] && secval=$2 || secval=2
+[[ ! -f $SCH_CFG_FILE ]] && touch $SCH_CFG_FILE && chmod 700 $SCH_CFG_FILE
+
+#job status
+while true
+do
+	TLNS=`cat $SCH_CFG_FILE |wc -l`
+	jobing=$(grep '","ING","' $SCH_CFG_FILE |wc -l)
+	jobfin=$(grep '","FIN","' $SCH_CFG_FILE |wc -l)
+	joberr=$(grep -E '","(ERR)+|(\|[0-9]+-ERR)+","' $SCH_CFG_FILE |wc -l)
+	jobunf=$(expr $TLNS - $jobing - $jobfin - $joberr)
+	
+	if [ $jobing -eq 0 -a $jobfin -eq 0 -a $joberr -eq 0 ];then
+		echo no jobs found...
+		[ -z "$loop" ] && time=1
+	else
+	{
+		if [ $jobing -eq 0 -a $(expr $jobfin + $joberr) -eq $TLNS ];then
+			echo all jobs finished.
+			[ -z "$loop" ] && time=1
+		else
+			jobsno=$(grep ',"ING",' $SCH_CFG_FILE|awk -F '","' '{ORS="";print substr($1,2)",";}')
+			if [ $jobing -eq 0 ];then
+				echo $jobing jobs are running.
+			else
+				echo $jobing jobs are running: [${jobsno%?}]
+			fi
+		fi
+		
+		echo $jobfin jobs are normal.
+		echo $joberr jobs are errored.
+		echo $jobunf jobs are unfinished.
+	}
+	fi
+	
+	if [ $time -eq 1 ];then
+		break
+	fi
+	sleep $secval
+	echo
+done

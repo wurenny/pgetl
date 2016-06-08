@@ -1,0 +1,84 @@
+#* This Source Code Form is subject to the terms of the Mozilla Public
+#* License, v. 2.0. If a copy of the MPL was not distributed with this
+#* file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#*
+#* Copyright (c) 2015-2016, wurenny@gmail.com, All rights reserved
+#*
+#* IDENTIFICATION
+#*     uninstall
+#* AUTHOR:renny
+#* PARAMS:
+#* HISTORY:
+#*     2016/05/15:created
+#*
+#* This file is part of PGETL(PostgreSQL ETL) project
+#* uninstall.sh is un-installer for PGETL
+#*
+#******************************************************************************************
+BINPATH=`cd $(dirname $0);pwd`
+SCH_PATH="$BINPATH/scheduler"
+GLOBAL_INI="$SCH_PATH/cfg/sch/global.ini"
+PG_PATH=`grep "^PG_PATH" $GLOBAL_INI | cut -d"=" -f2`
+PATH=$PG_PATH:$SCH_PATH/bin:$PATH:.
+
+ip=`grep "^SCH_DB_IP" $GLOBAL_INI | cut -d"=" -f2`
+port=`grep "^SCH_DB_PORT" $GLOBAL_INI | cut -d"=" -f2`
+db=`grep "^SCH_DB_NAME" $GLOBAL_INI | cut -d"=" -f2`
+schema=`grep "^SCH_DB_SCHEMA" $GLOBAL_INI | cut -d"=" -f2`
+username=`grep "^SCH_DB_USERNAME" $GLOBAL_INI | cut -d"=" -f2`
+password=`grep "^SCH_DB_PASSWORD" $GLOBAL_INI | cut -d"=" -f2`
+
+time="date +'%Y-%m-%d %H:%M:%S'"
+stty erase ^H
+
+#prompt
+echo "|-------------------------------------------------------------------------------|
+|.........................PostgreSQL ETL Uninstaller............................|
+|-------------------------------------------------------------------------------|
+|....This guide will help you to finish UN-installation for PGETL...............|
+|....PGETL uses database-table to store your schedule metadata..................|
+|....so you need to provide connection parameters in next steps.................|
+|....according to the prompt on screen..........................................|
+|-------------------------------------------------------------------------------|"
+
+#param
+[[ -n "$1" && "$1" != "demo" ]] && echo "The first optional parameter only support [demo]" && exit
+
+echo "********************************************************************************"
+echo -e "Installed connection={\n  ip=$ip\n  port=$port\n  dbname=$db\n  schema=$schema\n  username=$username\n  password=$password\n}"
+echo "********************************************************************************"
+
+#confirm
+while true
+do
+	read -p "continue with PGETL install? y|n:" confirm
+	[[ -n $confirm && $confirm = "n" ]] && exit
+	[[ -n $confirm && $confirm = "y" ]] &&
+	break || (echo "****WANNING:must be y or n, input again")
+done
+
+#remove from path
+[[ -f ~/.pgetlrc ]] && rm ~/.pgetlrc
+wc=`grep "source ~/.pgetlrc" ~/.bash_profile 2>/dev/null | wc -l`
+[[ $wc -gt 0 ]] && sed -i "$(grep -n 'source ~/.pgetlrc' ~/.bash_profile | cut -d: -f1)d" ~/.bash_profile
+
+#create schema ?
+export PGPASSWORD="$password"
+sql="select count(*) x from pg_namespace where nspname='$schema'"
+conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username" -Ptuples_only -c "$sql" 2>&1)
+[[ $conn != " 0" && $conn != " 1" ]] && echo "$conn" && exit
+[[ "$conn" = " 0" ]] && echo "schema: \"$schema\" not found, please recheck the PGETL configure: $GLOBAL_INI" && exit
+
+
+#install db
+conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username" -v__PGETL_DB_NAME="$db" -v__PGETL_DB_SCHEMA="$schema" -f "$BINPATH/sqlsource/uistlplus.sql" 2>&1)
+#echo $conn
+[[ -z $1 || $1 != "demo" ]] &&
+conn=$(psql -h "$ip" -p "$port" -d "$db" -U "$username" -v__PGETL_DB_SCHEMA="$schema" -f "$BINPATH/sqlsource/uistl.sql" 2>&1)
+#echo $conn
+
+
+#prompt
+echo "|-------------------------------UN-INSTALL FINISH-------------------------------|"
+[[ -n $1 && $1 = "demo" ]] && echo "HINT:only demo uninstalled" || echo "Note: should remove [$BINPATH] manually"
+echo
