@@ -137,7 +137,7 @@ begin
 			'(select string_agg(a,'''')::text str from '||
 			'(select generate_series(1,' || least(32,atttypmod-4) ||
 			') id,chr(ascii(''A'') +floor(random()*((id*random()*31)::int%26))::int) a) x)'
-		when substr(data_type,1,10)='timestamp(' then 'current_timestamp'
+		when substr(data_type,1,9)='timestamp' then 'current_timestamp'
 		else 'id' end sqlpart 
 		from(
 			SELECT a.attname,format_type(a.atttypid, a.atttypmod) AS data_type,
